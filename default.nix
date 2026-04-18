@@ -1,19 +1,54 @@
 {
   lib,
+  stdenv,
+  pkg-config,
   hyprland,
-  hyprlandPlugins,
+  pixman,
+  libdrm,
+  pango,
+  libinput,
+  systemd,
+  wayland,
+  libxkbcommon,
 }:
-hyprlandPlugins.mkHyprlandPlugin {
-  pluginName = "render-unfocused-fix";
-  version = "0.1";
+stdenv.mkDerivation {
+  pname = "render-unfocused-fix";
+  version = "0.1.0";
+
   src = ./.;
 
-  inherit (hyprland) nativeBuildInputs;
+  strictDeps = true;
+
+  nativeBuildInputs = [
+    pkg-config
+  ];
+
+  buildInputs = [
+    hyprland
+    pixman
+    libdrm
+    pango
+    libinput
+    systemd
+    wayland
+    libxkbcommon
+  ];
+
+  buildPhase = ''
+    runHook preBuild
+    make
+    runHook postBuild
+  '';
+
+  installPhase = ''
+    runHook preInstall
+    install -Dm755 render-unfocused-fix.so $out/lib/render-unfocused-fix.so
+    runHook postInstall
+  '';
 
   meta = with lib; {
-    homepage = "https://github.com/hyprwm/hyprland-plugins/tree/main/render-unfocused-fix";
-    description = "Renders a 1x1 indicator from a fullscreen window on another workspace";
-    license = licenses.bsd3;
+    description = "Hyprland plugin that offscreen-renders render_unfocused windows outside the active workspace";
+    license = licenses.mit;
     platforms = platforms.linux;
   };
 }
