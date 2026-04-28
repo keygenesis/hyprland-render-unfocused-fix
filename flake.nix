@@ -15,7 +15,7 @@
     pkgs = nixpkgs.legacyPackages.${system};
   in {
     packages.${system}.default = pkgs.callPackage ./default.nix {
-      hyprland = hyprland.packages.${system}.hyprland-dev;
+      hyprland = hyprland.packages.${system}.hyprland-unwrapped;
     };
 
     devShells.${system}.default = pkgs.mkShell {
