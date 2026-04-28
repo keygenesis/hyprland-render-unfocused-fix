@@ -34,6 +34,8 @@ stdenv.mkDerivation {
     systemd
     wayland
     libxkbcommon
+    aquamarine
+    mesa
   ];
 
   buildPhase = ''
