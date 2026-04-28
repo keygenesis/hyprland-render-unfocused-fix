@@ -10,6 +10,8 @@
   systemd,
   wayland,
   libxkbcommon,
+  aquamarine
+  mesa 
 }:
 stdenv.mkDerivation {
   pname = "render-unfocused-fix";
