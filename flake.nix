@@ -13,9 +13,11 @@
   }: let
     system = "x86_64-linux";
     pkgs = nixpkgs.legacyPackages.${system};
+    hyprlandPkg = hyprland.packages.${system}.hyprland;
   in {
     packages.${system}.default = pkgs.callPackage ./default.nix {
-      hyprland = hyprland.packages.${system}.hyprland-unwrapped;
+      hyprland = hyprlandPkg;
+      hyprlandPlugins = hyprlandPkg.passthru.providedSessions or hyprland.lib.mkHyprlandPlugins pkgs hyprlandPkg;
     };
 
     devShells.${system}.default = pkgs.mkShell {
