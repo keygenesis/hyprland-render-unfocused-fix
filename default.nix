@@ -10,15 +10,11 @@
   systemd,
   wayland,
   libxkbcommon,
-  aquamarine,
-  mesa, 
 }:
 stdenv.mkDerivation {
   pname = "render-unfocused-fix";
   version = "0.1.0";
-
   src = ./.;
-
   strictDeps = true;
 
   nativeBuildInputs = [
@@ -34,8 +30,6 @@ stdenv.mkDerivation {
     systemd
     wayland
     libxkbcommon
-    aquamarine
-    mesa
   ];
 
   buildPhase = ''
