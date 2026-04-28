@@ -18,8 +18,10 @@
 #include <hyprland/src/render/gl/GLFramebuffer.hpp>
 
 #define private public
+#define protected public
 #include <hyprland/src/render/Renderer.hpp>
 #include <hyprland/src/render/OpenGL.hpp>
+#undef protected
 #undef private
 
 #include <hyprutils/utils/ScopeGuard.hpp>
