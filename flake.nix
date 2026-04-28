@@ -1,5 +1,5 @@
 {
-  description = "Hyprland plugin that performs offscreen rendering for selected windows without drawing any visible overlay on screen";
+  description = "Hyprland plugin that offscreen-renders render_unfocused windows outside the active workspace";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -12,12 +12,11 @@
     hyprland,
   }: let
     system = "x86_64-linux";
-    pkgs = nixpkgs.legacyPackages.${system};
-    hyprlandPkg = hyprland.packages.${system}.hyprland;
+    pkgs = nixpkgs.legacyPackages.${system}.extend hyprland.overlays.hyprland-packages;
   in {
     packages.${system}.default = pkgs.callPackage ./default.nix {
-      hyprland = hyprlandPkg;
-      hyprlandPlugins = hyprlandPkg.passthru.providedSessions or hyprland.lib.mkHyprlandPlugins pkgs hyprlandPkg;
+      hyprland = pkgs.hyprland;
+      hyprlandPlugins = pkgs.hyprlandPlugins;
     };
 
     devShells.${system}.default = pkgs.mkShell {
