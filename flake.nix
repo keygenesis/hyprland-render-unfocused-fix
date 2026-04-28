@@ -12,11 +12,10 @@
     hyprland,
   }: let
     system = "x86_64-linux";
-    pkgs = nixpkgs.legacyPackages.${system}.extend hyprland.overlays.hyprland-packages;
+    pkgs = nixpkgs.legacyPackages.${system};
   in {
     packages.${system}.default = pkgs.callPackage ./default.nix {
-      hyprland = pkgs.hyprland;
-      hyprlandPlugins = pkgs.hyprlandPlugins;
+      hyprland = hyprland.packages.${system}.hyprland;
     };
 
     devShells.${system}.default = pkgs.mkShell {
