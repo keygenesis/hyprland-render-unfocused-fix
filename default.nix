@@ -1,16 +1,34 @@
 {
   lib,
+  stdenv,
+  pkg-config,
   hyprland,
-  hyprlandPlugins,
 }:
-hyprlandPlugins.mkHyprlandPlugin hyprland {
-  pluginName = "render-unfocused-fix";
+stdenv.mkDerivation {
+  pname = "render-unfocused-fix";
   version = "0.1.0";
   src = ./.;
+  strictDeps = true;
 
-  nativeBuildInputs = [];
+  nativeBuildInputs = [
+    pkg-config
+  ];
 
-  buildInputs = [];
+  buildInputs = [
+    hyprland
+  ] ++ hyprland.buildInputs;
+
+  buildPhase = ''
+    runHook preBuild
+    make
+    runHook postBuild
+  '';
+
+  installPhase = ''
+    runHook preInstall
+    install -Dm755 render-unfocused-fix.so $out/lib/render-unfocused-fix.so
+    runHook postInstall
+  '';
 
   meta = with lib; {
     description = "Hyprland plugin that offscreen-renders render_unfocused windows outside the active workspace";
