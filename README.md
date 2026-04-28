@@ -83,6 +83,32 @@ exec-once = hyprctl plugin load {FULL_PATH}/render-unfocused-fix.so
 
 The plugin should be built against a Hyprland version compatible with the headers and plugin API available in your current environment.
 
+## NixOS
+
+In `flake.nix`:
+
+```nix
+{
+  inputs = {
+    render-unfocused-fix = {
+      url = "github:yayuuu/hyprland-render-unfocused-fix";
+      inputs.hyprland.follows = "hyprland";
+    };
+  };
+}
+```
+
+Then add the plugin via the Hyprland home-manager module:
+
+```nix
+wayland.windowManager.hyprland = {
+  enable = true;
+  plugins = [
+    inputs.render-unfocused-fix.packages.${pkgs.system}.default
+  ];
+};
+```
+
 ## Example rule
 
 Example rule that enables the plugin for fullscreen windows:
