@@ -1,7 +1,6 @@
 #define WLR_USE_UNSTABLE
 
 #include <unistd.h>
-
 #include <algorithm>
 #include <chrono>
 #include <vector>
@@ -16,10 +15,14 @@
 #include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
 #include <hyprland/src/managers/eventLoop/EventLoopTimer.hpp>
 #include <hyprland/src/render/Framebuffer.hpp>
+#include <hyprland/src/render/gl/GLFramebuffer.hpp>
+
 #define private public
 #include <hyprland/src/render/Renderer.hpp>
-#include <hyprutils/utils/ScopeGuard.hpp>
+#include <hyprland/src/render/OpenGL.hpp>
 #undef private
+
+#include <hyprutils/utils/ScopeGuard.hpp>
 
 #include "globals.hpp"
 
@@ -29,9 +32,9 @@ struct SForcedSurfaceVisibility {
 };
 
 struct SSnapshot {
-    PHLWINDOWREF window;
-    CFramebuffer fb;
-    bool         valid = false;
+    PHLWINDOWREF             window;
+    SP<Render::IFramebuffer> fb;
+    bool                     valid = false;
 };
 
 struct SPluginState {
@@ -39,10 +42,13 @@ struct SPluginState {
         if (snapshotTimer)
             snapshotTimer->cancel();
 
-        g_pHyprRenderer->makeEGLCurrent();
+        Render::GL::g_pHyprOpenGL->makeEGLCurrent();
+
         for (auto& snapshot : snapshots) {
-            if (snapshot && snapshot->fb.isAllocated())
-                snapshot->fb.release();
+            if (snapshot && snapshot->fb) {
+                snapshot->fb->release();
+                snapshot->fb.reset();
+            }
         }
     }
 
@@ -55,10 +61,9 @@ struct SPluginState {
     CHyprSignalListener monitorFocusedHook;
     CHyprSignalListener configReloadHook;
 
-    SP<CEventLoopTimer>      snapshotTimer;
+    SP<CEventLoopTimer>        snapshotTimer;
     std::vector<UP<SSnapshot>> snapshots;
-
-    bool                     hasValidSnapshot = false;
+    bool                       hasValidSnapshot = false;
 };
 
 inline UP<SPluginState> g_pState;
@@ -97,13 +102,10 @@ static std::vector<PHLWINDOW> getTrackedWindows() {
 
         if (aOnFocused != bOnFocused)
             return aOnFocused > bOnFocused;
-
         if (a->m_workspace->m_id != b->m_workspace->m_id)
             return a->m_workspace->m_id < b->m_workspace->m_id;
-
         if (a->m_class != b->m_class)
             return a->m_class < b->m_class;
-
         if (a->m_title != b->m_title)
             return a->m_title < b->m_title;
 
@@ -147,6 +149,7 @@ static void forceSurfaceVisibility(SP<CWLSurfaceResource> surface, std::vector<S
         return;
 
     const auto HLSURFACE = Desktop::View::CWLSurface::fromResource(surface);
+
     if (!HLSURFACE)
         return;
 
@@ -163,21 +166,25 @@ static void forceWindowSurfaceVisibility(PHLWINDOW window, std::vector<SForcedSu
     if (window->m_isX11 || !window->m_popupHead)
         return;
 
-    window->m_popupHead->breadthfirst([&forcedSurfaces](WP<Desktop::View::CPopup> popup, void*) {
-        if (!popup || !popup->aliveAndVisible() || !popup->wlSurface() || !popup->wlSurface()->resource())
-            return;
+    window->m_popupHead->breadthfirst(
+        [&forcedSurfaces](WP<Desktop::View::CPopup> popup, void*) {
+            if (!popup || !popup->aliveAndVisible() || !popup->wlSurface() || !popup->wlSurface()->resource())
+                return;
 
-        popup->wlSurface()->resource()->breadthfirst([&forcedSurfaces](SP<CWLSurfaceResource> surface, const Vector2D&, void*) { forceSurfaceVisibility(surface, forcedSurfaces); }, nullptr);
-    }, nullptr);
+            popup->wlSurface()->resource()->breadthfirst([&forcedSurfaces](SP<CWLSurfaceResource> surface, const Vector2D&, void*) { forceSurfaceVisibility(surface, forcedSurfaces); }, nullptr);
+        },
+        nullptr);
 }
 
 static void restoreSurfaceVisibility(std::vector<SForcedSurfaceVisibility>& forcedSurfaces) {
     for (auto& entry : forcedSurfaces) {
         const auto surface = entry.surface.lock();
+
         if (!surface)
             continue;
 
         const auto HLSURFACE = Desktop::View::CWLSurface::fromResource(surface);
+
         if (!HLSURFACE)
             continue;
 
@@ -192,8 +199,10 @@ static void clearSnapshot() {
         return;
 
     for (auto& snapshot : g_pState->snapshots) {
-        if (snapshot && snapshot->fb.isAllocated())
-            snapshot->fb.release();
+        if (snapshot && snapshot->fb) {
+            snapshot->fb->release();
+            snapshot->fb.reset();
+        }
     }
 
     g_pState->snapshots.clear();
@@ -211,15 +220,17 @@ static void syncSnapshots(const std::vector<PHLWINDOW>& windows) {
             ordered.push_back(std::move(*it));
             g_pState->snapshots.erase(it);
         } else {
-            auto snapshot   = makeUnique<SSnapshot>();
+            auto snapshot    = makeUnique<SSnapshot>();
             snapshot->window = window;
             ordered.push_back(std::move(snapshot));
         }
     }
 
     for (auto& snapshot : g_pState->snapshots) {
-        if (snapshot && snapshot->fb.isAllocated())
-            snapshot->fb.release();
+        if (snapshot && snapshot->fb) {
+            snapshot->fb->release();
+            snapshot->fb.reset();
+        }
     }
 
     g_pState->snapshots = std::move(ordered);
@@ -230,13 +241,16 @@ static bool redrawSnapshotNow() {
         return false;
 
     const auto windows = getTrackedWindows();
+
     if (windows.empty()) {
         clearSnapshot();
         return false;
     }
 
     syncSnapshots(windows);
-    g_pHyprRenderer->makeEGLCurrent();
+
+    Render::GL::g_pHyprOpenGL->makeEGLCurrent();
+
     g_pState->hasValidSnapshot = false;
 
     for (auto& snapshot : g_pState->snapshots) {
@@ -252,39 +266,48 @@ static bool redrawSnapshotNow() {
             continue;
 
         const auto workspace = window->m_workspace;
+
         if (!workspace || sourceMonitor->m_pixelSize.x <= 0 || sourceMonitor->m_pixelSize.y <= 0)
             continue;
 
         const auto fbFormat = getFramebufferFormat(sourceMonitor);
-        if (snapshot->fb.m_size != sourceMonitor->m_pixelSize || snapshot->fb.m_drmFormat != fbFormat) {
-            snapshot->fb.release();
-            snapshot->fb.alloc(sourceMonitor->m_pixelSize.x, sourceMonitor->m_pixelSize.y, fbFormat);
+
+        if (!snapshot->fb || snapshot->fb->m_size != sourceMonitor->m_pixelSize || snapshot->fb->m_drmFormat != fbFormat) {
+            if (snapshot->fb) {
+                snapshot->fb->release();
+                snapshot->fb.reset();
+            }
+            snapshot->fb = g_pHyprRenderer->createFB("ruf-snapshot");
+            snapshot->fb->alloc(sourceMonitor->m_pixelSize.x, sourceMonitor->m_pixelSize.y, fbFormat);
         }
 
         std::vector<SForcedSurfaceVisibility> forcedSurfaces;
-        const bool                            wasVisible        = workspace->m_visible;
-        const bool                            wasForceRendering = workspace->m_forceRendering;
 
-        workspace->m_visible        = true;
+        const bool wasVisible       = workspace->m_visible;
+        const bool wasForceRendering = workspace->m_forceRendering;
+
+        workspace->m_visible       = true;
         workspace->m_forceRendering = true;
+
         forceWindowSurfaceVisibility(window, forcedSurfaces);
 
         auto restoreState = Hyprutils::Utils::CScopeGuard([workspace, wasVisible, wasForceRendering, &forcedSurfaces] {
-            workspace->m_visible        = wasVisible;
+            workspace->m_visible       = wasVisible;
             workspace->m_forceRendering = wasForceRendering;
             restoreSurfaceVisibility(forcedSurfaces);
         });
 
         CRegion fakeDamage{0, 0, INT16_MAX, INT16_MAX};
-        if (!g_pHyprRenderer->beginRender(sourceMonitor, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, &snapshot->fb))
+
+        if (!g_pHyprRenderer->beginRender(sourceMonitor, fakeDamage, Render::RENDER_MODE_FULL_FAKE, nullptr, snapshot->fb))
             continue;
 
-        g_pHyprOpenGL->clear(CHyprColor{0, 0, 0, 0});
-        g_pHyprRenderer->renderWindow(window, sourceMonitor, Time::steadyNow(), true, RENDER_PASS_ALL, true, true);
-        g_pHyprOpenGL->m_renderData.blockScreenShader = true;
+        Render::GL::g_pHyprOpenGL->clear(CHyprColor{0, 0, 0, 0});
+        g_pHyprRenderer->renderWindow(window, sourceMonitor, Time::steadyNow(), true, Render::RENDER_PASS_ALL, true, true);
+        Render::GL::g_pHyprOpenGL->m_renderData.blockScreenShader = true;
         g_pHyprRenderer->endRender();
 
-        snapshot->valid             = true;
+        snapshot->valid            = true;
         g_pState->hasValidSnapshot = true;
     }
 
@@ -320,19 +343,24 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 
     g_unloading = false;
     g_pState    = makeUnique<SPluginState>();
-    g_pState->snapshotTimer = makeShared<CEventLoopTimer>(std::nullopt, [](SP<CEventLoopTimer>, void*) {
-        refreshSnapshotNow();
-    }, nullptr);
+
+    g_pState->snapshotTimer = makeShared<CEventLoopTimer>(
+        std::nullopt,
+        [](SP<CEventLoopTimer>, void*) {
+            refreshSnapshotNow();
+        },
+        nullptr);
+
     g_pEventLoopManager->addTimer(g_pState->snapshotTimer);
 
-    g_pState->windowOpenHook = Event::bus()->m_events.window.open.listen([](PHLWINDOW) { refreshSnapshotNow(); });
-    g_pState->windowCloseHook = Event::bus()->m_events.window.close.listen([](PHLWINDOW) { refreshSnapshotNow(); });
-    g_pState->windowMoveHook = Event::bus()->m_events.window.moveToWorkspace.listen([](PHLWINDOW, PHLWORKSPACE) { refreshSnapshotNow(); });
-    g_pState->windowActiveHook = Event::bus()->m_events.window.active.listen([](PHLWINDOW, Desktop::eFocusReason) { refreshSnapshotNow(); });
-    g_pState->windowRulesHook = Event::bus()->m_events.window.updateRules.listen([](PHLWINDOW) { refreshSnapshotNow(); });
+    g_pState->windowOpenHook      = Event::bus()->m_events.window.open.listen([](PHLWINDOW) { refreshSnapshotNow(); });
+    g_pState->windowCloseHook     = Event::bus()->m_events.window.close.listen([](PHLWINDOW) { refreshSnapshotNow(); });
+    g_pState->windowMoveHook      = Event::bus()->m_events.window.moveToWorkspace.listen([](PHLWINDOW, PHLWORKSPACE) { refreshSnapshotNow(); });
+    g_pState->windowActiveHook    = Event::bus()->m_events.window.active.listen([](PHLWINDOW, Desktop::eFocusReason) { refreshSnapshotNow(); });
+    g_pState->windowRulesHook     = Event::bus()->m_events.window.updateRules.listen([](PHLWINDOW) { refreshSnapshotNow(); });
     g_pState->workspaceActiveHook = Event::bus()->m_events.workspace.active.listen([](PHLWORKSPACE) { refreshSnapshotNow(); });
-    g_pState->monitorFocusedHook = Event::bus()->m_events.monitor.focused.listen([](PHLMONITOR) { refreshSnapshotNow(); });
-    g_pState->configReloadHook = Event::bus()->m_events.config.reloaded.listen([] { scheduleBootstrapRefresh(); });
+    g_pState->monitorFocusedHook  = Event::bus()->m_events.monitor.focused.listen([](PHLMONITOR) { refreshSnapshotNow(); });
+    g_pState->configReloadHook    = Event::bus()->m_events.config.reloaded.listen([] { scheduleBootstrapRefresh(); });
 
     scheduleBootstrapRefresh();
 
